@@ -1,0 +1,244 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main", "dev"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ONNXRUNTIME_VERSION: "1.20.1"
+  YOLOS_MODELS_RELEASE: "v1.0.0-models"
+
+jobs:
+  # ==========================================================================
+  # Build and Unit Tests (No Models Required)
+  # ==========================================================================
+  build:
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        ros_distro: [humble, jazzy]
+    
+    runs-on: ubuntu-latest
+    container:
+      image: ros:${{ matrix.ros_distro }}-ros-base
+    
+    steps:
+      - name: Install Git
+        run: apt-get update && apt-get install -y git
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential \
+            cmake \
+            libopencv-dev \
+            python3-colcon-common-extensions \
+            curl
+
+      - name: Install ROS 2 dependencies
+        run: |
+          apt-get install -y \
+            ros-${{ matrix.ros_distro }}-image-transport \
+            ros-${{ matrix.ros_distro }}-vision-msgs \
+            ros-${{ matrix.ros_distro }}-cv-bridge \
+            ros-${{ matrix.ros_distro }}-rclcpp-components \
+            ros-${{ matrix.ros_distro }}-lifecycle
+
+      - name: Create workspace
+        run: |
+          mkdir -p /ros2_ws/src
+          ln -s ${GITHUB_WORKSPACE} /ros2_ws/src/ros2_yolos_cpp
+
+      - name: Build
+        working-directory: /ros2_ws
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          colcon build --packages-select ros2_yolos_cpp --cmake-args \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Run Unit Tests
+        working-directory: /ros2_ws
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          source install/setup.bash
+          # Run unit tests (converters, etc.)
+          colcon test --packages-select ros2_yolos_cpp \
+            --ctest-args -R "test_detection_converter" \
+            --return-code-on-test-failure \
+            --event-handlers console_direct+
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.ros_distro }}
+          path: /ros2_ws/build/*/test_results/
+          retention-days: 7
+
+  # ==========================================================================
+  # Integration Tests with Models (Matrix: Detection, Seg, Pose, OBB, Cls)
+  # ==========================================================================
+  # ==========================================================================
+  # Integration Tests with Models (Matrix: Detection, Seg, Pose, OBB, Cls)
+  # ==========================================================================
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: build
+    container:
+      image: ros:humble-ros-base
+    
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - name: detection
+            model_asset: yolo-detection-models-tuned.zip
+            model_env: YOLOS_TEST_MODEL
+            labels_env: YOLOS_TEST_LABELS
+            model_file: detection/YOLOv11n_voc.onnx
+            labels_file: detection/voc.names
+          - name: segmentation
+            model_asset: yolo-segmentation-models-tuned.zip
+            model_env: YOLOS_SEG_MODEL
+            labels_env: YOLOS_SEG_LABELS
+            model_file: segmentation/yolo11s-seg.onnx
+            labels_file: segmentation/coco.names
+          - name: pose
+            model_asset: yolo-pose-models-tuned.zip
+            model_env: YOLOS_POSE_MODEL
+            model_file: pose/yolo11n-pose.onnx
+          - name: obb
+            model_asset: yolo-obb-models-tuned.zip
+            model_env: YOLOS_OBB_MODEL
+            labels_env: YOLOS_OBB_LABELS
+            model_file: obb/yolo11n-obb.onnx
+            labels_file: obb/Dota.names
+          - name: classification
+            model_asset: yolo-classification-models-tuned.zip
+            model_env: YOLOS_CLS_MODEL
+            labels_env: YOLOS_CLS_LABELS
+            model_file: classification/yolo11l-cls.onnx
+            labels_file: classification/labels.names
+    
+    steps:
+      - name: Install Git
+        run: apt-get update && apt-get install -y git
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential cmake libopencv-dev curl unzip \
+            python3-colcon-common-extensions \
+            ros-humble-image-transport \
+            ros-humble-vision-msgs \
+            ros-humble-cv-bridge \
+            ros-humble-rclcpp-components \
+            ros-humble-lifecycle
+
+      - name: Download test models from YOLOs-CPP release
+        run: |
+          mkdir -p /tmp/models
+          cd /tmp/models
+          
+          # Download valid ONNX models from release
+          MODEL_URL="https://github.com/Geekgineer/YOLOs-CPP/releases/download/v1.0.0-onnx-tuned-models/${{ matrix.task.model_asset }}"
+          echo "Downloading: $MODEL_URL"
+          
+          if curl -L --fail "$MODEL_URL" -o models.zip 2>/dev/null; then
+            unzip -o models.zip
+            echo "Downloaded models from release"
+          else
+            echo "Release download failed for $MODEL_URL"
+            exit 1
+          fi
+          
+          ls -R /tmp/models/
+
+      - name: Download test image
+        run: |
+          mkdir -p /tmp/test_images
+          curl -sL "https://ultralytics.com/images/bus.jpg" -o /tmp/test_images/bus.jpg
+          echo "Downloaded test image"
+
+      - name: Create workspace and build
+        run: |
+          mkdir -p /ros2_ws/src
+          ln -s ${GITHUB_WORKSPACE} /ros2_ws/src/ros2_yolos_cpp
+          cd /ros2_ws
+          source /opt/ros/humble/setup.bash
+          colcon build --packages-select ros2_yolos_cpp --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Run ${{ matrix.task.name }} integration tests
+        working-directory: /ros2_ws
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          
+          # Set environment variables for test
+          # Note: unzip extraction preserves the folder structure (e.g., detection/YOLO...)
+          export ${{ matrix.task.model_env }}="/tmp/models/${{ matrix.task.model_file }}"
+          export YOLOS_TEST_IMAGE="/tmp/test_images/bus.jpg"
+          
+          # Set labels if applicable
+          if [ -n "${{ matrix.task.labels_file }}" ]; then
+            export ${{ matrix.task.labels_env }}="/tmp/models/${{ matrix.task.labels_file }}"
+          fi
+          
+          echo "Running test with model: ${${{ matrix.task.model_env }}}"
+          
+          # Run the specific integration test
+          colcon test --packages-select ros2_yolos_cpp \
+            --ctest-args -R "test_integration_${{ matrix.task.name }}" \
+            --event-handlers console_direct+
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-${{ matrix.task.name }}
+          path: /ros2_ws/build/*/test_results/
+          retention-days: 7
+
+  # ==========================================================================
+  # Lint Check
+  # ==========================================================================
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check C++ formatting
+        run: |
+          if command -v clang-format &> /dev/null; then
+            find include/ src/ -name "*.cpp" -o -name "*.hpp" | head -30 | \
+              xargs -I {} sh -c 'clang-format --dry-run --Werror {} || echo "Format issues in {}"'
+          else
+            echo "clang-format not available"
+          fi

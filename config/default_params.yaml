@@ -1,0 +1,38 @@
+# Default parameters for ros2_yolos_cpp nodes
+# Override these via launch file arguments or parameter YAML
+
+/**:
+  ros__parameters:
+    # YOLO Model Configuration
+    model_path: ""              # Required: Path to ONNX model
+    labels_path: ""             # Required: Path to class names file
+    use_gpu: false              # Enable CUDA acceleration
+    yolo_version: "auto"        # auto, v7, v8, v10, v11, v26, nas
+    
+    # Detection Thresholds
+    conf_threshold: 0.4         # Confidence threshold (0.0-1.0)
+    nms_threshold: 0.45         # NMS IoU threshold (0.0-1.0)
+    
+    # OBB-specific
+    max_detections: 300         # Maximum OBB detections
+    
+    # Debug & Logging
+    publish_debug_image: false  # Publish annotated debug image
+    publish_timing: false       # Publish inference timing metrics
+
+    # Camera Intrinsics (placeholder values: replace after calibration)
+    camera_fx: 812.4
+    camera_fy: 809.7
+    camera_cx: 323.1
+    camera_cy: 242.8
+
+    # Known geometry for planar distance estimation
+    target_plane_distance_m: 2.0
+
+# Example override for specific node:
+# yolos_detector:
+#   ros__parameters:
+#     model_path: "/path/to/yolov8n.onnx"
+#     labels_path: "/path/to/coco.names"
+#     use_gpu: true
+#     conf_threshold: 0.5
