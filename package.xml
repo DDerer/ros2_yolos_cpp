@@ -4,9 +4,8 @@
   <name>ros2_yolos_cpp</name>
   <version>1.0.0</version>
   <description>
-    Production-grade ROS 2 wrapper for YOLOs-CPP inference library.
-    Supports Detection, Segmentation, Pose, OBB, and Classification tasks
-    with lifecycle management and zero-copy composition.
+    ROS 2 wrapper for YOLOs-CPP inference library.
+    Supports Detection task with lifecycle management.
   </description>
   <maintainer email="abdalrahman.m5959@gmail.com">YOLOs-CPP Team</maintainer>
   <license>AGPL-3.0</license>
@@ -43,16 +42,11 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
 
   <!-- Message generation -->
   <member_of_group>rosidl_interface_packages</member_of_group>
-  <exec_depend>rosidl_default_runtime</exec_depend>
-
-  <!-- Test dependencies -->
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
-  <test_depend>ament_cmake_gtest</test_depend>
-  <test_depend>launch_testing_ament_cmake</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

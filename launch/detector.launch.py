@@ -3,8 +3,9 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
@@ -28,12 +29,41 @@ def generate_launch_description():
     image_topic_arg = DeclareLaunchArgument(
         "image_topic", default_value="/camera/image_raw", description="Input image topic"
     )
+    start_camera_arg = DeclareLaunchArgument(
+        "start_camera",
+        default_value="true",
+        description="Whether to start usb_cam together with detector",
+    )
+    camera_params_file_arg = DeclareLaunchArgument(
+        "camera_params_file",
+        default_value=PathJoinSubstitution(
+            [FindPackageShare("ros2_yolos_cpp"), "config", "usb_cam_params.yaml"]
+        ),
+        description="Path to usb_cam parameter yaml",
+    )
+    service_name_arg = DeclareLaunchArgument(
+        "service_name",
+        default_value="~/detect",
+        description="Detection service name for request-driven inference",
+    )
     params_file_arg = DeclareLaunchArgument(
         "params_file",
         default_value=PathJoinSubstitution(
             [FindPackageShare("ros2_yolos_cpp"), "config", "default_params.yaml"]
         ),
         description="Path to detector parameter yaml",
+    )
+
+    camera_node = Node(
+        package="usb_cam",
+        executable="usb_cam_node_exe",
+        name="usb_cam",
+        parameters=[LaunchConfiguration("camera_params_file")],
+        remappings=[
+            ("/image_raw", LaunchConfiguration("image_topic")),
+        ],
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("start_camera")),
     )
 
     # Composable node container (multi-threaded for async inference)
@@ -60,6 +90,7 @@ def generate_launch_description():
                 ],
                 remappings=[
                     ("~/image_raw", LaunchConfiguration("image_topic")),
+                    ("~/detect", LaunchConfiguration("service_name")),
                 ],
             ),
         ],
@@ -73,7 +104,11 @@ def generate_launch_description():
             use_gpu_arg,
             conf_threshold_arg,
             image_topic_arg,
+            start_camera_arg,
+            camera_params_file_arg,
+            service_name_arg,
             params_file_arg,
+            camera_node,
             container,
         ]
     )

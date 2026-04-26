@@ -106,12 +106,24 @@ YolosDetectorNode::CallbackReturn YolosDetectorNode::on_activate(const rclcpp_li
         "~/image_raw", rclcpp::SensorDataQoS(), std::bind(&YolosDetectorNode::imageCallback, this, std::placeholders::_1),
         options);
 
-    RCLCPP_INFO(get_logger(), "Activated - waiting for images on ~/image_raw");
+    detect_service_ = create_service<srv::DetectImage>(
+        "~/detect",
+        std::bind(&YolosDetectorNode::detectServiceCallback, this, std::placeholders::_1, std::placeholders::_2),
+        rclcpp::ServicesQoS(), inference_cb_group_);
+
+    RCLCPP_INFO(get_logger(), "Activated - caching images from ~/image_raw and waiting for requests on ~/detect");
     return CallbackReturn::SUCCESS;
 }
 
 YolosDetectorNode::CallbackReturn YolosDetectorNode::on_deactivate(const rclcpp_lifecycle::State&) {
     image_sub_.reset();
+    detect_service_.reset();
+    {
+        std::lock_guard<std::mutex> lock(latest_frame_mutex_);
+        latest_frame_.release();
+        latest_header_ = std_msgs::msg::Header();
+        has_latest_frame_ = false;
+    }
     det_pub_->on_deactivate();
     if (offset_pub_) offset_pub_->on_deactivate();
     if (offset_m_pub_) offset_m_pub_->on_deactivate();
@@ -124,6 +136,14 @@ YolosDetectorNode::CallbackReturn YolosDetectorNode::on_cleanup(const rclcpp_lif
     if (detector_) {
         detector_->shutdown();
         detector_.reset();
+    }
+    image_sub_.reset();
+    detect_service_.reset();
+    {
+        std::lock_guard<std::mutex> lock(latest_frame_mutex_);
+        latest_frame_.release();
+        latest_header_ = std_msgs::msg::Header();
+        has_latest_frame_ = false;
     }
     det_pub_.reset();
     offset_pub_.reset();
@@ -138,26 +158,81 @@ YolosDetectorNode::CallbackReturn YolosDetectorNode::on_shutdown(const rclcpp_li
 }
 
 void YolosDetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg) {
-    if (!detector_ || !detector_->isInitialized()) {
+    if (!msg) {
         return;
     }
 
+    // In service-driven mode, stream callback only caches the newest frame.
     try {
         auto cv_image = cv_bridge::toCvShare(msg, "bgr8");
-        processFrame(cv_image->image, msg->header);
+        std::lock_guard<std::mutex> lock(latest_frame_mutex_);
+        latest_frame_ = cv_image->image.clone();
+        latest_header_ = msg->header;
+        has_latest_frame_ = true;
     } catch (const std::exception& e) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Image conversion failed: %s", e.what());
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Image caching failed: %s", e.what());
     }
 }
 
-void YolosDetectorNode::processFrame(const cv::Mat& frame, const std_msgs::msg::Header& header) {
-    if (!detector_ || !detector_->isInitialized()) return;
+void YolosDetectorNode::detectServiceCallback(const std::shared_ptr<srv::DetectImage::Request> request,
+                                              std::shared_ptr<srv::DetectImage::Response> response) {
+    if (!response) {
+        return;
+    }
+    if (!detector_ || !detector_->isInitialized()) {
+        RCLCPP_WARN(get_logger(), "Detector is not initialized, returning empty distance result");
+        response->distance_m = std_msgs::msg::Float64MultiArray();
+        return;
+    }
+    if (!request) {
+        RCLCPP_WARN(get_logger(), "Received null detect request");
+        response->distance_m = std_msgs::msg::Float64MultiArray();
+        return;
+    }
+    (void)request;
+    cv::Mat frame;
+    std_msgs::msg::Header header;
+    {
+        std::lock_guard<std::mutex> lock(latest_frame_mutex_);
+        if (!has_latest_frame_ || latest_frame_.empty()) {
+            RCLCPP_WARN(get_logger(), "No cached image available yet; waiting for ~/image_raw before calling detect service");
+            response->distance_m = std_msgs::msg::Float64MultiArray();
+            return;
+        }
+        frame = latest_frame_.clone();
+        header = latest_header_;
+    }
+    // 只推理并返回距离
+    auto detection_msg = processFrame(frame, header);
+    if (detection_msg.detections.empty()) {
+        RCLCPP_WARN(get_logger(), "No target detected, not responding to service request.");
+        return; // 不返回响应
+    }
+    std_msgs::msg::Float64MultiArray distance_msg;
+    const auto& det = detection_msg.detections[0];
+    const double center_x = det.bbox.center.position.x;
+    const double center_y = det.bbox.center.position.y;
+    const double offset_x_m = target_plane_distance_m_ * (center_x - camera_cx_) / camera_fx_;
+    const double offset_y_m = target_plane_distance_m_ * (center_y - camera_cy_) / camera_fy_;
+    const double planar_distance_m = std::hypot(offset_x_m, offset_y_m);
+    const double line_distance_m = std::hypot(planar_distance_m, target_plane_distance_m_);
+    distance_msg.data = {planar_distance_m, line_distance_m};
+    response->distance_m = distance_msg;
+}
+
+vision_msgs::msg::Detection2DArray YolosDetectorNode::processFrame(const cv::Mat& frame, const std_msgs::msg::Header& header) {
+    vision_msgs::msg::Detection2DArray detection_msg;
+    detection_msg.header = header;
+    if (!detector_ || !detector_->isInitialized()) return detection_msg;
     auto t_start = std::chrono::high_resolution_clock::now();
     try {
         auto t_preprocess = std::chrono::high_resolution_clock::now();
         auto detections = detector_->detect(frame, conf_threshold_, nms_threshold_);
         auto t_inference = std::chrono::high_resolution_clock::now();
-        det_pub_->publish(conversion::toDetection2DArray(detections, header, frame.cols, frame.rows));
+        detection_msg = conversion::toDetection2DArray(detections, header, frame.cols, frame.rows);
+        if (det_pub_ && det_pub_->is_activated()) {
+            det_pub_->publish(detection_msg);
+        }
         auto t_postprocess = std::chrono::high_resolution_clock::now();
 
         const int image_center_x = frame.cols / 2;
@@ -206,6 +281,8 @@ void YolosDetectorNode::processFrame(const cv::Mat& frame, const std_msgs::msg::
     } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Detection failed: %s", e.what());
     }
+
+    return detection_msg;
 }
 
 }  // namespace ros2_yolos_cpp

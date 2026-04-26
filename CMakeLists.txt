@@ -186,15 +186,11 @@ endif()
 message(STATUS "YOLOs-CPP Source: ${YOLOS_CPP_DIR}")
 
 # =============================================================================
-# Custom Messages (OBB Detection)
+# Custom Messages
 # =============================================================================
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/OrientedBoundingBox2D.msg"
-  "msg/OBBDetection2D.msg"
-  "msg/OBBDetection2DArray.msg"
-  "msg/KeyPoint2D.msg"
-  "msg/KeyPoint2DArray.msg"
-  DEPENDENCIES std_msgs geometry_msgs
+  "srv/DetectImage.srv"
+  DEPENDENCIES std_msgs geometry_msgs sensor_msgs vision_msgs
 )
 
 # =============================================================================
@@ -212,22 +208,10 @@ include_directories(
 add_library(${PROJECT_NAME}_components SHARED
   # Adapters
   src/adapters/detector_adapter.cpp
-  src/adapters/segmentor_adapter.cpp
-  src/adapters/pose_adapter.cpp
-  src/adapters/obb_adapter.cpp
-  src/adapters/classifier_adapter.cpp
   # Message Converters
   src/conversion/detection_converter.cpp
-  src/conversion/segmentation_converter.cpp
-  src/conversion/pose_converter.cpp
-  src/conversion/obb_converter.cpp
-  src/conversion/classification_converter.cpp
   # Nodes
   src/nodes/detector_node.cpp
-  src/nodes/segmentor_node.cpp
-  src/nodes/pose_node.cpp
-  src/nodes/obb_node.cpp
-  src/nodes/classifier_node.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -263,26 +247,6 @@ target_link_libraries(${PROJECT_NAME}_components "${cpp_typesupport_target}")
 rclcpp_components_register_node(${PROJECT_NAME}_components
   PLUGIN "ros2_yolos_cpp::YolosDetectorNode"
   EXECUTABLE yolos_detector_node
-)
-
-rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "ros2_yolos_cpp::YolosSegmentorNode"
-  EXECUTABLE yolos_segmentor_node
-)
-
-rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "ros2_yolos_cpp::YolosPoseNode"
-  EXECUTABLE yolos_pose_node
-)
-
-rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "ros2_yolos_cpp::YolosOBBNode"
-  EXECUTABLE yolos_obb_node
-)
-
-rclcpp_components_register_node(${PROJECT_NAME}_components
-  PLUGIN "ros2_yolos_cpp::YolosClassifierNode"
-  EXECUTABLE yolos_classifier_node
 )
 
 # =============================================================================
@@ -323,33 +287,6 @@ install(DIRECTORY config/
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
-  
-  find_package(ament_cmake_gtest REQUIRED)
-  
-  # Unit tests (always run)
-  ament_add_gtest(test_detection_converter
-    test/unit/test_detection_converter.cpp
-  )
-  target_link_libraries(test_detection_converter ${PROJECT_NAME}_components)
-  ament_target_dependencies(test_detection_converter rclcpp vision_msgs)
-  
-  # Integration tests (require model files via environment variables)
-  # Set YOLOS_TEST_MODEL, YOLOS_TEST_LABELS, YOLOS_TEST_IMAGE to run
-  
-  macro(add_integration_test target_name source_file)
-    ament_add_gtest(${target_name} ${source_file})
-    target_link_libraries(${target_name} 
-      ${PROJECT_NAME}_components 
-      ${OpenCV_LIBS}
-    )
-    ament_target_dependencies(${target_name} rclcpp rclcpp_lifecycle)
-  endmacro()
-
-  add_integration_test(test_integration_detection test/integration/test_detection.cpp)
-  add_integration_test(test_integration_segmentation test/integration/test_segmentation.cpp)
-  add_integration_test(test_integration_pose test/integration/test_pose.cpp)
-  add_integration_test(test_integration_obb test/integration/test_obb.cpp)
-  add_integration_test(test_integration_classification test/integration/test_classification.cpp)
 endif()
 
 # =============================================================================

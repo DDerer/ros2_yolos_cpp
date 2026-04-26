@@ -5,6 +5,7 @@
 #define ROS2_YOLOS_CPP__NODES__DETECTOR_NODE_HPP_
 
 #include <memory>
+#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -15,6 +16,7 @@
 #include <vision_msgs/msg/detection2_d_array.hpp>
 
 #include "ros2_yolos_cpp/adapters/detector_adapter.hpp"
+#include "ros2_yolos_cpp/srv/detect_image.hpp"
 #include "ros2_yolos_cpp/visibility_control.hpp"
 
 namespace ros2_yolos_cpp {
@@ -36,11 +38,18 @@ class ROS2_YOLOS_CPP_PUBLIC YolosDetectorNode : public rclcpp_lifecycle::Lifecyc
     void declareParameters();
     YolosConfig loadConfig();
     void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
-    void processFrame(const cv::Mat& frame, const std_msgs::msg::Header& header);
+    void detectServiceCallback(const std::shared_ptr<srv::DetectImage::Request> request,
+                               std::shared_ptr<srv::DetectImage::Response> response);
+    vision_msgs::msg::Detection2DArray processFrame(const cv::Mat& frame, const std_msgs::msg::Header& header);
 
     std::unique_ptr<IDetectorAdapter> detector_;
     rclcpp::CallbackGroup::SharedPtr inference_cb_group_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+    rclcpp::Service<srv::DetectImage>::SharedPtr detect_service_;
+    std::mutex latest_frame_mutex_;
+    cv::Mat latest_frame_;
+    std_msgs::msg::Header latest_header_;
+    bool has_latest_frame_{false};
 
     rclcpp_lifecycle::LifecyclePublisher<vision_msgs::msg::Detection2DArray>::SharedPtr det_pub_;
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Int32MultiArray>::SharedPtr offset_pub_;
